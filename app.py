@@ -198,3 +198,19 @@ st.download_button(
     file_name="digital_twin_resultados.csv",
     mime="text/csv"
 )
+
+
+#generar reporte con llm
+
+from llm_gen import generate_summary
+
+st.title("Digital Twin Financiero")
+
+# Cargar resultados del escenario
+df_res = pd.read_csv("impacto_combined_por_cliente.csv")
+
+# Botón para generar informe ejecutivo
+if st.button("Generar informe ejecutivo"):
+    summary = generate_summary(df_res)
+    st.markdown("### 📊 Informe Ejecutivo")
+    st.write(summary)

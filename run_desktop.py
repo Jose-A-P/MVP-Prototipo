@@ -18,7 +18,7 @@ def create_window():
     Crea una ventana PyWebview cargando http://localhost:8501
     """
     # Esperar a que streamlit levante
-    time.sleep(2)
+    time.sleep(5)
 
     webview.create_window(
         "Digital Twin Financiero",
