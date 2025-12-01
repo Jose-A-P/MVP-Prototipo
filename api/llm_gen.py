@@ -48,3 +48,27 @@ def generate_summary(df):
     ))
 
     return summary
+
+def generate_chat_response(prompt: str, df_context: pd.DataFrame) -> str:
+    # Configurar LLM local con Ollama
+    llm = OllamaLLM(model="gemma:2b")
+
+    # Resumir el DataFrame para dar contexto
+    sample = df_context.to_string()
+    stats = df_context.describe().to_string()
+
+    full_prompt = f"""
+    Usa la siguiente información de clientes como contexto:
+
+    Muestra de datos:
+    {sample}
+
+    Estadísticas generales:
+    {stats}
+
+    Pregunta del usuario: {prompt}
+
+    Responde basándote en estos datos teniendo el rol de un analista financiero .
+    """
+
+    return llm.invoke(full_prompt)

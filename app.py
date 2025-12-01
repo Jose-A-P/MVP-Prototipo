@@ -215,7 +215,8 @@ st.download_button(
 
 #generar reporte con llm
 
-from api.llm_gen import generate_summary
+# generar reporte con llm
+from api.llm_gen import generate_summary, generate_chat_response
 
 # Cargar resultados del escenario
 df_res = pd.read_csv(CLIENTES_COMBINED_PATH)
@@ -223,5 +224,18 @@ df_res = pd.read_csv(CLIENTES_COMBINED_PATH)
 # Botón para generar informe ejecutivo
 if st.button("Generar informe ejecutivo"):
     summary = generate_summary(df_res)
-    st.markdown("### 📊 Informe Ejecutivo")
+    st.markdown("### Informe Ejecutivo")
     st.write(summary)
+
+# Chatbox con input de texto
+st.markdown("### Chat con el modelo")
+user_prompt = st.text_input("Escribe tu pregunta o prompt:")
+
+if user_prompt:
+    # Usa df_res como contexto
+    response = generate_chat_response(user_prompt, df_res)
+    st.markdown("**Respuesta: **")
+    st.write(response)
+
+
+    
