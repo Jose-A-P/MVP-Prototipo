@@ -4,11 +4,24 @@ import numpy as np
 import joblib
 import seaborn as sns
 import matplotlib.pyplot as plt
+import os
 
-# CONFIG
-CSV_PATH = "clientes_simulados_combined.csv"
-MODEL_PATH = "modelo_logistico_impago.pkl"
-SCALER_PATH = "scaler_modelo.pkl"
+
+# STREAMLIT UI
+st.set_page_config(page_title="Digital Twin Financiero", layout="wide")
+
+
+# === RUTAS COHERENTES CON digital_twin.py ===
+BASE_DIR = os.path.join(os.path.dirname(__file__), "data")
+
+# === RUTAS COHERENTES CON digital_twin.py ===
+BASE_DIR = os.path.join(os.path.dirname(__file__), "data")
+
+CSV_PATH = os.path.join(BASE_DIR, "clientes_simulados_combined.csv")  # <-- usar este
+MODEL_PATH = os.path.join(BASE_DIR, "modelo_logistico_impago.pkl")
+SCALER_PATH = os.path.join(BASE_DIR, "scaler_modelo.pkl")
+CLIENTES_COMBINED_PATH = os.path.join(BASE_DIR, "impacto_combined_por_cliente.csv")
+
 
 # CARGAR DATA & MODELO
 @st.cache_data
@@ -78,10 +91,10 @@ def predict(df):
     X_scaled = scaler.transform(X)
     return model.predict_proba(X_scaled)[:, 1]
 
-# STREAMLIT UI
-st.set_page_config(page_title="Digital Twin Financiero", layout="wide")
+
 st.title("Digital Twin Financiero – Simulación de Escenarios")
 st.markdown("Dashboard que permite evaluar **cómo cambian las probabilidades de impago** bajo distintos escenarios económicos.")
+
 
 st.sidebar.header("Configuración de Escenario")
 
@@ -202,12 +215,10 @@ st.download_button(
 
 #generar reporte con llm
 
-from llm_gen import generate_summary
-
-st.title("Digital Twin Financiero")
+from api.llm_gen import generate_summary
 
 # Cargar resultados del escenario
-df_res = pd.read_csv("impacto_combined_por_cliente.csv")
+df_res = pd.read_csv(CLIENTES_COMBINED_PATH)
 
 # Botón para generar informe ejecutivo
 if st.button("Generar informe ejecutivo"):

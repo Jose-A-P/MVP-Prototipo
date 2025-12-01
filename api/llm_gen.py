@@ -1,6 +1,14 @@
 import pandas as pd
 from langchain_core.prompts import PromptTemplate
-from langchain_ollama import OllamaLLM   # nuevo import
+from langchain_ollama import OllamaLLM   # si funciona
+import os
+
+'''
+llm = OllamaLLM(
+    model="llama2",
+    base_url=os.getenv("OLLAMA_HOST", "http://host.docker.internal:11434")
+)
+'''
 
 def generate_summary(df):
     # Calcular métricas agregadas
@@ -12,7 +20,7 @@ def generate_summary(df):
     cluster_summary = df.groupby("cluster_kmeans")[["prob_base","prob_scenario","delta_prob"]].mean()
 
     # Configurar LLM local con Ollama
-    llm = OllamaLLM(model="mistral")  # puedes usar "llama2", "gemma", etc.
+    llm = OllamaLLM(model="gemma:2b")  # se puede usar "mistral", "gemma:2b", etc.
 
     # Prompt para informe ejecutivo
     template = """
