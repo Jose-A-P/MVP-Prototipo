@@ -85,19 +85,58 @@ def load_or_train_model(df=None):
     return model, scaler, X.columns
 
 def predict_prob(model, scaler, df, feature_cols):
-    X = pd.concat([df[feature_cols], pd.get_dummies(df["comportamiento_app"], drop_first=True)], axis=1)
+    df = df.copy()
+    if "comportamiento_app" not in df.columns:
+        if "comportamiento_app_NoUso" in df.columns or "comportamiento_app_Uso" in df.columns:
+            raise ValueError(
+                "El dataframe no contiene 'comportamiento_app' y no puede reconstruirse."
+            )
+        else:
+            df["comportamiento_app"] = "Uso_App"
+
+    dummies = pd.get_dummies(df["comportamiento_app"], drop_first=True)
+    X = pd.concat([df[feature_cols], dummies], axis=1)
+
     for col in feature_cols:
         if col not in X.columns:
             X[col] = 0
-    X = X.reindex(columns=feature_cols + [c for c in X.columns if c not in feature_cols], fill_value=0)
+
+    X = X.reindex(columns=list(X.columns), fill_value=0)
     X_scaled = scaler.transform(X)
+
     return model.predict_proba(X_scaled)[:, 1]
 
+
 # Escenarios (igual que antes)
-def scenario_income_drop(df, pct_drop=0.2): ...
-def scenario_interest_rate_increase(df, extra_rate=0.03): ...
-def scenario_worse_payment_behavior(df, extra_missed=0.5): ...
-def scenario_combined(df, income_drop=0.2, rate_inc=0.03, extra_missed=0.5): ...
+def scenario_income_drop(df, pct_drop=0.2):
+    df2 = df.copy()
+    df2["ingresos_mensuales"] = df2["ingresos_mensuales"] * (1 - pct_drop)
+    return df2
+
+
+def scenario_interest_rate_increase(df, extra_rate=0.03):
+    df2 = df.copy()
+    df2["saldo_actual"] = df2["saldo_actual"] * (1 + extra_rate * 2)
+    df2["uso_credito"] = (df2["uso_credito"] + extra_rate * 3).clip(0, 1)
+    return df2
+
+
+def scenario_worse_payment_behavior(df, extra_missed=0.5):
+    df2 = df.copy()
+    df2["historial_impagos"] = (
+        df2["historial_impagos"] + 
+        np.random.poisson(lam=extra_missed, size=len(df2))
+    ).astype(int)
+    df2["frecuencia_pago"] = (df2["frecuencia_pago"] - extra_missed).clip(0)
+    return df2
+
+
+def scenario_combined(df, income_drop=0.2, rate_inc=0.03, extra_missed=0.5):
+    df2 = scenario_income_drop(df, income_drop)
+    df2 = scenario_interest_rate_increase(df2, rate_inc)
+    df2 = scenario_worse_payment_behavior(df2, extra_missed)
+    return df2
+
 
 # Resumen
 def summarize_impact(df_base, df_scenario, probs_base, probs_scenario, top_n=10):
