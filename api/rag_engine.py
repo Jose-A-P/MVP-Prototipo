@@ -1,39 +1,67 @@
-import pandas as pd
-import chromadb
-from langchain_ollama import OllamaEmbeddings
-from langchain.vectorstores import Chroma
+from langchain_ollama import OllamaEmbeddings, OllamaLLM
+from langchain_community.vectorstores import Chroma
+from langchain_core.documents import Document
+from langchain_core.prompts import ChatPromptTemplate
+from langchain.chains import RetrievalQA
 
-class TabularRAG:
-    def __init__(self, csv_path, persist_dir="rag_store"):
-        self.csv_path = csv_path
-        self.persist_dir = persist_dir
+from api.rag_finance_knowledge import build_financial_knowledge_corpus
 
-        self.client = chromadb.PersistentClient(path=persist_dir)
-        self.emb = OllamaEmbeddings(model="nomic-embed-text")  # rápido y bueno
 
-    def load_csv(self):
-        self.df = pd.read_csv(self.csv_path)
-        return self.df
+class DigitalTwinRAG:
+    def __init__(self, persist_directory: str | None = None):
+        self.persist_directory = persist_directory
+        self.store = None
+        self.retriever = None
+        self.qa_chain = None
 
-    def build_store(self, chunk_size=20):
-        """Convierte el CSV en texto chunked y genera embeddings."""
-        docs = []
-        metadatas = []
+    def build_store(self):
+        texts = build_financial_knowledge_corpus()
 
-        for i in range(0, len(self.df), chunk_size):
-            chunk_df = self.df.iloc[i:i+chunk_size]
-            doc_text = chunk_df.to_json(orient="records")
-            docs.append(doc_text)
-            metadatas.append({"row_start": i, "row_end": i+len(chunk_df)})
+        docs = [Document(page_content=t, metadata={"source": "financial_knowledge"}) for t in texts]
 
-        # Crear vector store
-        self.store = Chroma.from_texts(
-            texts=docs,
-            embedding=self.emb,
-            metadatas=metadatas,
-            persist_directory=self.persist_dir
+        embeddings = OllamaEmbeddings(model="nomic-embed-text")
+        self.store = Chroma.from_documents(
+            documents=docs,
+            embedding=embeddings,
+            collection_name="digital_twin_finance",
+            persist_directory=self.persist_directory
+        )
+        self.retriever = self.store.as_retriever(
+            search_kwargs={"k": 4}
         )
 
-    def similarity_search(self, query, k=4):
-        """Devuelve los chunks más relevantes."""
-        return self.store.similarity_search(query, k=k)
+    def build_qa_chain(self):
+        if self.retriever is None:
+            self.build_store()
+
+        llm = OllamaLLM(model="mistral")
+
+        prompt = ChatPromptTemplate.from_template(
+            """
+            Eres un analista de riesgo de crédito en un banco.
+            Responde a la pregunta del usuario utilizando EXCLUSIVAMENTE
+            el contexto proporcionado, que describe la cartera, los clusters,
+            las variables del modelo de impago y los escenarios simulados.
+
+            Sé específico, numérico cuando sea posible, y usa lenguaje financiero claro.
+
+            CONTEXTO:
+            {context}
+
+            PREGUNTA:
+            {question}
+            """
+        )
+
+        self.qa_chain = RetrievalQA.from_chain_type(
+            llm=llm,
+            retriever=self.retriever,
+            chain_type="stuff",
+            chain_type_kwargs={"prompt": prompt}
+        )
+        return self.qa_chain
+
+    def get_qa_chain(self):
+        if self.qa_chain is None:
+            return self.build_qa_chain()
+        return self.qa_chain
