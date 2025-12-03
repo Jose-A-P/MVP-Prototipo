@@ -85,23 +85,23 @@ def load_or_train_model(df=None):
     return model, scaler, X.columns
 
 def predict_prob(model, scaler, df, feature_cols):
-    df = df.copy()
-    if "comportamiento_app" not in df.columns:
-        if "comportamiento_app_NoUso" in df.columns or "comportamiento_app_Uso" in df.columns:
-            raise ValueError(
-                "El dataframe no contiene 'comportamiento_app' y no puede reconstruirse."
-            )
-        else:
-            df["comportamiento_app"] = "Uso_App"
+    # Construir X con las mismas columnas que en entrenamiento
+    X = pd.concat(
+        [df[feature_cols], pd.get_dummies(df["comportamiento_app"], drop_first=True)],
+        axis=1
+    )
 
-    dummies = pd.get_dummies(df["comportamiento_app"], drop_first=True)
-    X = pd.concat([df[feature_cols], dummies], axis=1)
+    # Obtener todas las columnas dummy que existían durante entrenamiento
+    full_cols = scaler.feature_names_in_
 
-    for col in feature_cols:
+    # Asegurar que todas las columnas existen
+    for col in full_cols:
         if col not in X.columns:
             X[col] = 0
 
-    X = X.reindex(columns=list(X.columns), fill_value=0)
+    X = X.reindex(columns=full_cols)
+
+    # Transformar
     X_scaled = scaler.transform(X)
 
     return model.predict_proba(X_scaled)[:, 1]

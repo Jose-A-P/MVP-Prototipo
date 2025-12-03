@@ -1,5 +1,50 @@
 import pandas as pd
 import numpy as np
+import re
+
+# FUNCIONES AUXILIARES
+def extract_top_n(prompt):
+    match = re.search(r'\b(\d+)\b', prompt)
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def extract_cluster(prompt):
+    match = re.search(r'cluster\s*(\d+)', prompt)
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def extract_threshold(prompt, df):
+    """
+    Detecta filtros de la forma:
+    - mayor a 0.4
+    - arriba de 2000
+    - > 0.3
+    y los aplica a la columna correcta según contexto de la pregunta.
+    """
+    # Detectar número
+    match = re.search(r'(mayor a|mayores a|> ?)(\d+\.?\d*)', prompt)
+    if not match:
+        return None, None
+
+    threshold = float(match.group(2))
+
+    # Detectar columna implícita según palabras usadas
+    p = prompt.lower()
+
+    if "riesgo" in p or "probabilidad" in p:
+        return "prob_scenario", threshold
+    if "ingreso" in p:
+        return "ingresos_mensuales", threshold
+    if "saldo" in p:
+        return "saldo_actual", threshold
+    if "uso" in p:
+        return "uso_credito", threshold
+
+    return None, None
 
 # FUNCIONES GENERALES
 
@@ -59,6 +104,18 @@ def get_client_info(df, client_id):
         return f"No se encontró el cliente {client_id}"
     return row.iloc[0].to_dict()
 
+def apply_filters(df, cluster=None, column=None, threshold=None):
+    df2 = df.copy()
+
+    if cluster is not None:
+        df2 = df2[df2["cluster_kmeans"] == cluster]
+
+    if column is not None and threshold is not None:
+        df2 = df2[df2[column] >= threshold]
+
+    return df2
+
+
 # INTELIGENCIA PARA DETECTAR PREGUNTAS
 
 def parse_dataset_query(prompt, df):
@@ -83,8 +140,8 @@ def parse_dataset_query(prompt, df):
     if "describe" in p or "resumen" in p or "estadistica" in p:
         return {"intent": "describe", "columns": columns_detected}
 
-    if "top" in p or "peores" in p or "más afectados" in p:
-        return {"intent": "top_delta", "columns": []}
+    if "top" in p or "más afectados" in p or "mas afectados" in p or "peores" in p:
+        return {"intent": "top_delta"}
 
     if "cluster" in p and "riesgo" in p:
         return {"intent": "cluster_risk", "columns": []}

@@ -22,14 +22,51 @@ from api.dataset_query_tools import (
     worst_clients,
     cluster_stats,
     get_client_info,
-    filter_by_risk
+    filter_by_risk,
+    extract_top_n,
+    extract_top_n, 
+    extract_cluster, 
+    extract_threshold, 
+    apply_filters
 )
 
+from api.scenario_explainer import compute_scenario_metrics
 
-# ============================================================
+# FUNCION AUXILIAR DEL CHATBOT
+def generate_scenario_explanation():
+    metrics = compute_scenario_metrics()
+    if metrics is None:
+        return "Aún no existe un escenario simulado para analizar."
+
+    llm = OllamaLLM(model="mistral")
+
+    prompt = f"""
+    Eres un analista financiero especializado en riesgo de crédito.
+    Explica los resultados del escenario simulado utilizando las siguientes métricas:
+
+    - Probabilidad media base: {metrics["mean_base"]:.4f}
+    - Probabilidad media bajo escenario: {metrics["mean_scenario"]:.4f}
+    - Aumento promedio (delta): {metrics["mean_delta"]:.4f}
+    - Severidad del impacto: {metrics["severity"]}
+
+    - Cluster más afectado: {metrics["cluster_worst"]} 
+      (delta promedio = {metrics["cluster_worst_delta"]:.4f})
+
+    - Top 5 clientes más afectados:
+      {metrics["top5"]}
+
+    Elabora un análisis narrativo con:
+    * Explicación general del escenario
+    * Identificación de deterioros relevantes
+    * Implicaciones para riesgo crediticio
+    * Impacto por cluster
+    * Riesgos emergentes
+    * Conclusiones ejecutivas
+    """
+
+    return llm.invoke(prompt)
+
 # FUNCIÓN PRINCIPAL DEL CHATBOT
-# ============================================================
-
 def generate_chat_response(prompt: str) -> str:
     prompt_l = prompt.lower()
 
@@ -91,8 +128,34 @@ def generate_chat_response(prompt: str) -> str:
             # TOP DELTA
             # ----------------------------
             if parsed["intent"] == "top_delta":
-                top = top_n_by_delta(df, n=10)
-                return f"Top 10 clientes con mayor deterioro:\n\n```\n{top.to_string()}\n```"
+                n = extract_top_n(prompt) or 10
+
+                # Extraer cluster si viene en la consulta
+                cluster = extract_cluster(prompt)
+
+                # Extraer posibles filtros tipo "mayor a 0.4"
+                column, threshold = extract_threshold(prompt, df)
+
+                # Aplicar filtros
+                filtered_df = apply_filters(df, cluster=cluster, column=column, threshold=threshold)
+
+                # Recalcular delta si no existe
+                if "delta_prob" not in filtered_df.columns:
+                    filtered_df["delta_prob"] = filtered_df["prob_scenario"] - filtered_df["prob_base"]
+
+                # Tomar top N
+                top = filtered_df.sort_values("delta_prob", ascending=False).head(n)
+
+                # Construir texto descriptivo dinámico
+                desc_parts = [f"Top {n} clientes con mayor deterioro"]
+                if cluster is not None:
+                    desc_parts.append(f"en el cluster {cluster}")
+                if column and threshold:
+                    desc_parts.append(f"con {column} >= {threshold}")
+
+                desc = " ".join(desc_parts)
+
+                return f"{desc}:\n\n```\n{top.to_string()}\n```"
 
             # ----------------------------
             # RIESGO POR CLUSTER
@@ -149,125 +212,3 @@ def generate_chat_response(prompt: str) -> str:
     # ============================================================
     llm = OllamaLLM(model="mistral")
     return llm.invoke(prompt)
-
-
-# import pandas as pd
-# from langchain.prompts import PromptTemplate
-# from langchain_ollama import OllamaLLM
-# from api.digital_twin_tools import chatbot_execute_action, load_latest_data
-# from api.rag_chat import build_rag_pipeline
-# from api.shap_explainer import shap_for_client
-# import re
-# from api.dataset_query_tools import (
-#     parse_dataset_query,
-#     get_mean, get_max, get_min, describe_column,
-#     top_n_by_delta, worst_clients, cluster_stats,
-#     get_client_info, filter_by_risk, get_portfolio_risk_summary
-# )
-# from api.digital_twin_tools import load_latest_data
-
-# # Helper: construir prompt
-
-# FINANCIAL_ANALYST_PROMPT = """
-# Eres un analista financiero experto que usa los datos del cliente 
-# y la información recuperada del RAG para responder preguntas.
-
-# Contexto relevante recuperado:
-# {context}
-
-# Pregunta del usuario:
-# {question}
-
-# Instrucciones:
-# - Si la pregunta requiere ejecutar un escenario (caída de ingresos, aumento de tasa, peor comportamiento, escenario combinado),
-#   debes indicarlo y el sistema ejecutará la función correspondiente.
-# - Si el usuario pregunta datos numéricos, resúmenes, tendencias o patrones, analiza el contexto.
-# - Si la pregunta no puede responderse con el contexto, explica por qué.
-
-# Responde de forma clara, con razonamiento financiero.
-# """
-
-# # Función principal: combinación de TOOL EXECUTION + RAG
-
-# def generate_chat_response(prompt: str) -> str:
-#     """
-#     1. Primero detecta si el usuario quiere ejecutar un escenario del digital twin.
-#          - Si  → ejecuta la función → actualiza dataset → responde.
-#     2. Si no hay acción → usa RAG para responder basado en datos.
-#     """
-
-#     # Intentar ejecutar una acción del Digital Twin
-#     action_result = chatbot_execute_action(prompt)
-
-#     if action_result is not None:
-#         # El chatbot ejecutó un escenario real
-#         return f"{action_result}\n\nLos datos fueron actualizados."
-
-#     if "explica" in prompt.lower() or "shap" in prompt.lower():
-#         match = re.search(r"C\d{5}", prompt)
-#         if match:
-#             client_id = match.group(0)
-#             shap_df, summary = shap_for_client(client_id)
-#             if shap_df is None:
-#                 return summary  # mensaje de error
-#             return summary
-        
-#     query_type = detect_query_type(prompt)
-
-#     # Cargar dataset actualizado para el RAG
-#     df = load_latest_data()
-#     if df is not None and query_type is not None:
-#         prompt_l = prompt.lower()
-
-#         if query_type == "mean":
-#             for col in df.columns:
-#                 if col in prompt_l:
-#                     return f"La media de {col} es {df[col].mean():.4f}"
-
-#         if query_type == "max":
-#             for col in df.columns:
-#                 if col in prompt_l:
-#                     row = df.loc[df[col].idxmax()]
-#                     return f"Valor máximo en {col}: {row[col]:.4f}\nCliente: {row['ID_cliente']}"
-
-#         if query_type == "min":
-#             for col in df.columns:
-#                 if col in prompt_l:
-#                     row = df.loc[df[col].idxmin()]
-#                     return f"Valor mínimo en {col}: {row[col]:.4f}\nCliente: {row['ID_cliente']}"
-
-#         if query_type == "describe":
-#             for col in df.columns:
-#                 if col in prompt_l:
-#                     return str(df[col].describe())
-
-#         if query_type == "top_delta":
-#             result = top_n_by_delta(df, n=10)
-#             return result.to_string()
-
-#         if query_type == "cluster_risk":
-#             result = cluster_stats(df)
-#             return result.to_string()
-
-#         if query_type == "risk_filter":
-#             riesgo = filter_by_risk(df, threshold=0.4)
-#             return riesgo.to_string()
-
-#         if query_type == "client_info":
-#             import re
-#             match = re.search(r"C\d{5}", prompt)
-#             if match:
-#                 client_id = match.group(0)
-#                 return str(get_client_info(df, client_id))
-#     if df is None:
-#         return "No existe dataset combinado. Genera un escenario primero."
-    
-#     # Construir pipeline RAG (Retriever + LLM)
-#     rag_chain = build_rag_pipeline()
-
-#     # Ejecutar RAG
-#     try:
-#         response = rag_chain.invoke({"query": prompt})
-#         return response["result"]
-#     except Exception as e:
-#         return f"Error en el RAG: {e}"
