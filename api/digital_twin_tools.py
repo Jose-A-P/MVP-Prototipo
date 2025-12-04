@@ -20,6 +20,8 @@ from api.scenario_parser import (
 
 from api.digital_twin import MODEL_PATH, SCALER_PATH
 
+from api.scenario_manager import save_scenario
+
 MODULE_DIR = os.path.dirname(__file__)
 BASE_DIR = os.path.abspath(os.path.join(MODULE_DIR, "..", "data"))
 
@@ -39,6 +41,22 @@ print("CSV_PATH:", CSV_PATH)
 print("FILES IN BASE_DIR:", os.listdir(BASE_DIR))
 print("================================\n")
 
+# HELPER para guardar escenarios
+def persist_scenario_version(df_result, scenario_type: str, income_drop=None, rate_inc=None, behavior=None, cluster=None):
+    # DataFrame de impacto por cliente
+    impacto_cols = ["ID_cliente", "cluster_kmeans", "prob_base", "prob_scenario", "delta_prob"]
+    df_impacto = df_result[impacto_cols].copy()
+
+    metadata = {
+        "type": scenario_type,
+        "income_drop": float(income_drop) if income_drop is not None else None,
+        "rate_inc": float(rate_inc) if rate_inc is not None else None,
+        "behavior": float(behavior) if behavior is not None else None,
+        "cluster": int(cluster) if cluster is not None else None,
+    }
+
+    scenario_id = save_scenario(df_result, df_impacto, metadata)
+    return scenario_id
 
 # Cargar modelo (o entrenarlo si no existe)
 
@@ -115,16 +133,21 @@ def simulate_and_export(df, scenario_name, **kwargs):
 
 
 # Función general para permitir al Chatbot ejecutar escenarios
-
 def chatbot_execute_action(prompt):
     text = prompt.lower()
 
     from api.llm_gen import generate_scenario_explanation
+    from api.scenario_manager import save_scenario
 
+    # ------------------------------------------------------------------
+    # EXPLICACIÓN DEL ESCENARIO ACTUAL
+    # ------------------------------------------------------------------
     if "explica" in text or "resumen del escenario" in text or "impacto del escenario" in text:
         return generate_scenario_explanation()
-    
-    # Detectar parámetros dinámicos
+
+    # ------------------------------------------------------------------
+    # DETECTAR PARÁMETROS
+    # ------------------------------------------------------------------
     income_drop = detect_income_drop(text)
     rate_inc = detect_rate_increase(text)
     behavior = detect_behavior_worsening(text)
@@ -144,11 +167,11 @@ def chatbot_execute_action(prompt):
     if model is None:
         return "No existe un modelo entrenado."
 
-    # IDENTIFICAR SI EL ESCENARIO ES GLOBAL
-    is_global = cluster is None
-
-    # PREPARAR DATA
+    # ------------------------------------------------------------------
+    # PREPARACIÓN DE DATA
+    # ------------------------------------------------------------------
     df_full = df.copy()
+    is_global = cluster is None
 
     if not is_global:
         df_subset = df[df["cluster_kmeans"] == cluster].copy()
@@ -156,8 +179,10 @@ def chatbot_execute_action(prompt):
             return f"No existen clientes en el cluster {cluster}."
     else:
         df_subset = df.copy()
-    
-    # FUNCIÓN AUXILIAR PARA ESCENARIOS GLOBALES
+
+    # ------------------------------------------------------------------
+    # AUXILIARES
+    # ------------------------------------------------------------------
     def apply_global_scenario(df_scen):
         probs_base = predict_prob(model, scaler, df_full, feature_cols)
         probs_scenario = predict_prob(model, scaler, df_scen, feature_cols)
@@ -171,20 +196,29 @@ def chatbot_execute_action(prompt):
         df_result[["ID_cliente","cluster_kmeans","prob_base","prob_scenario","delta_prob"]].to_csv(
             IMPACTO_PATH, index=False)
 
-        return df_result
+        # GUARDAR ESCENARIO VERSIONADO
+        scenario_id = save_scenario(
+            df_result,
+            df_result[["ID_cliente","cluster_kmeans","prob_base","prob_scenario","delta_prob"]].copy(),
+            metadata={
+                "type": "global",
+                "income_drop": income_drop,
+                "rate_inc": rate_inc,
+                "behavior": behavior,
+                "cluster": None
+            }
+        )
+        return df_result, scenario_id
 
-    # FUNCIÓN AUXILIAR PARA ESCENARIOS POR CLUSTER
     def apply_cluster_scenario(df_scen_subset):
         probs_base_subset = predict_prob(model, scaler, df_subset, feature_cols)
         probs_scen_subset = predict_prob(model, scaler, df_scen_subset, feature_cols)
 
         df_result = df_full.copy()
 
-        # asignar al subset
         df_result.loc[df_subset.index, "prob_base"] = probs_base_subset
         df_result.loc[df_subset.index, "prob_scenario"] = probs_scen_subset
 
-        # otros clientes sin cambio
         others = df_full.index.difference(df_subset.index)
         if len(others) > 0:
             probs_base_others = predict_prob(model, scaler, df_full.loc[others], feature_cols)
@@ -197,17 +231,25 @@ def chatbot_execute_action(prompt):
         df_result[["ID_cliente","cluster_kmeans","prob_base","prob_scenario","delta_prob"]].to_csv(
             IMPACTO_PATH, index=False)
 
-        return df_result
+        # GUARDAR ESCENARIO VERSIONADO
+        scenario_id = save_scenario(
+            df_result,
+            df_result[["ID_cliente","cluster_kmeans","prob_base","prob_scenario","delta_prob"]].copy(),
+            metadata={
+                "type": "cluster",
+                "income_drop": income_drop,
+                "rate_inc": rate_inc,
+                "behavior": behavior,
+                "cluster": cluster
+            }
+        )
+        return df_result, scenario_id
 
+    # ============================================================
+    # ESCENARIO COMBINADO (múltiples parámetros)
+    # ============================================================
     if multiple_params:
-        
-        # Determinar si es global o por cluster
-        is_global = cluster is None
-
-        # Escenario global
         if is_global:
-
-            # Aplicar escenario al dataset completo
             df_scen = scenario_combined(
                 df_full,
                 income_drop=income_drop or 0,
@@ -215,16 +257,16 @@ def chatbot_execute_action(prompt):
                 extra_missed=behavior or 0
             )
 
-            apply_global_scenario(df_scen)
+            df_result, sid = apply_global_scenario(df_scen)
 
             return (
-                "Escenario combinado aplicado a todo el portafolio:\n"
+                f"Escenario combinado aplicado a todo el portafolio (ID {sid:03d}):\n"
                 f"- Ingresos: -{(income_drop or 0)*100:.1f}%\n"
                 f"- Tasas: +{(rate_inc or 0)*100:.1f}%\n"
                 f"- Impagos: +{behavior or 0}"
             )
 
-        # Escenario por cluster
+        # por cluster
         df_scen_subset = scenario_combined(
             df_subset,
             income_drop=income_drop or 0,
@@ -232,51 +274,58 @@ def chatbot_execute_action(prompt):
             extra_missed=behavior or 0
         )
 
-        apply_cluster_scenario(df_scen_subset)
+        df_result, sid = apply_cluster_scenario(df_scen_subset)
 
         return (
-            f"Escenario combinado aplicado en el cluster {cluster}:\n"
+            f"Escenario combinado aplicado en cluster {cluster} (ID {sid:03d}):\n"
             f"- Ingresos: -{(income_drop or 0)*100:.1f}%\n"
             f"- Tasas: +{(rate_inc or 0)*100:.1f}%\n"
             f"- Impagos: +{behavior or 0}"
         )
 
-
+    # ============================================================
     # ESCENARIO INGRESOS
+    # ============================================================
     if income_drop is not None:
         if is_global:
             df_scen = scenario_income_drop(df_full, pct_drop=income_drop)
-            apply_global_scenario(df_scen)
+            df_result, sid = apply_global_scenario(df_scen)
         else:
             df_scen_subset = scenario_income_drop(df_subset, pct_drop=income_drop)
-            apply_cluster_scenario(df_scen_subset)
+            df_result, sid = apply_cluster_scenario(df_scen_subset)
 
-        return f"Escenario aplicado: ingresos -{income_drop*100:.1f}%"
-    
+        return f"Escenario aplicado (ID {sid:03d}): ingresos -{income_drop*100:.1f}%"
+
+    # ============================================================
     # ESCENARIO TASA
+    # ============================================================
     if rate_inc is not None:
         if is_global:
             df_scen = scenario_interest_rate_increase(df_full, extra_rate=rate_inc)
-            apply_global_scenario(df_scen)
+            df_result, sid = apply_global_scenario(df_scen)
         else:
             df_scen_subset = scenario_interest_rate_increase(df_subset, extra_rate=rate_inc)
-            apply_cluster_scenario(df_scen_subset)
+            df_result, sid = apply_cluster_scenario(df_scen_subset)
 
-        return f"Escenario aplicado: tasas +{rate_inc*100:.1f}%"
+        return f"Escenario aplicado (ID {sid:03d}): tasas +{rate_inc*100:.1f}%"
 
+    # ============================================================
     # ESCENARIO COMPORTAMIENTO
+    # ============================================================
     if behavior is not None:
         if is_global:
             df_scen = scenario_worse_payment_behavior(df_full, extra_missed=behavior)
-            apply_global_scenario(df_scen)
+            df_result, sid = apply_global_scenario(df_scen)
         else:
             df_scen_subset = scenario_worse_payment_behavior(df_subset, extra_missed=behavior)
-            apply_cluster_scenario(df_scen_subset)
+            df_result, sid = apply_cluster_scenario(df_scen_subset)
 
-        return f"Escenario aplicado: peor comportamiento +{behavior}"
+        return f"Escenario aplicado (ID {sid:03d}): peor comportamiento +{behavior}"
 
-    # ESCENARIO COMBINADO
-    if income_drop is not None or rate_inc is not None or behavior is not None:
+    # ============================================================
+    # ESCENARIO COMBINADO NORMAL
+    # ============================================================
+    if income_drop or rate_inc or behavior:
         if is_global:
             df_scen = scenario_combined(
                 df_full,
@@ -284,7 +333,7 @@ def chatbot_execute_action(prompt):
                 rate_inc=rate_inc or 0,
                 extra_missed=behavior or 0
             )
-            apply_global_scenario(df_scen)
+            df_result, sid = apply_global_scenario(df_scen)
         else:
             df_scen_subset = scenario_combined(
                 df_subset,
@@ -292,10 +341,10 @@ def chatbot_execute_action(prompt):
                 rate_inc=rate_inc or 0,
                 extra_missed=behavior or 0
             )
-            apply_cluster_scenario(df_scen_subset)
+            df_result, sid = apply_cluster_scenario(df_scen_subset)
 
         return (
-            "Escenario combinado aplicado:\n"
+            f"Escenario combinado aplicado (ID {sid:03d}):\n"
             f"- Ingresos: -{(income_drop or 0)*100:.1f}%\n"
             f"- Tasas: +{(rate_inc or 0)*100:.1f}%\n"
             f"- Impagos: +{behavior or 0}"
@@ -303,7 +352,192 @@ def chatbot_execute_action(prompt):
 
     return None
 
+# def chatbot_execute_action(prompt):
+#     text = prompt.lower()
 
+#     from api.llm_gen import generate_scenario_explanation
+
+#     if "explica" in text or "resumen del escenario" in text or "impacto del escenario" in text:
+#         return generate_scenario_explanation()
+    
+#     # Detectar parámetros dinámicos
+#     income_drop = detect_income_drop(text)
+#     rate_inc = detect_rate_increase(text)
+#     behavior = detect_behavior_worsening(text)
+#     cluster = detect_cluster(text)
+
+#     multiple_params = sum([
+#         income_drop is not None,
+#         rate_inc is not None,
+#         behavior is not None
+#     ]) > 1
+
+#     df = load_latest_data()
+#     if df is None:
+#         return "No hay datos cargados. Ejecuta primero un escenario."
+
+#     model, scaler, feature_cols = load_model_and_scaler()
+#     if model is None:
+#         return "No existe un modelo entrenado."
+
+#     # IDENTIFICAR SI EL ESCENARIO ES GLOBAL
+#     is_global = cluster is None
+
+#     # PREPARAR DATA
+#     df_full = df.copy()
+
+#     if not is_global:
+#         df_subset = df[df["cluster_kmeans"] == cluster].copy()
+#         if df_subset.empty:
+#             return f"No existen clientes en el cluster {cluster}."
+#     else:
+#         df_subset = df.copy()
+    
+#     # FUNCIÓN AUXILIAR PARA ESCENARIOS GLOBALES
+#     def apply_global_scenario(df_scen):
+#         probs_base = predict_prob(model, scaler, df_full, feature_cols)
+#         probs_scenario = predict_prob(model, scaler, df_scen, feature_cols)
+
+#         df_result = df_full.copy()
+#         df_result["prob_base"] = probs_base
+#         df_result["prob_scenario"] = probs_scenario
+#         df_result["delta_prob"] = df_result["prob_scenario"] - df_result["prob_base"]
+
+#         df_result.to_csv(COMBINED_PATH, index=False)
+#         df_result[["ID_cliente","cluster_kmeans","prob_base","prob_scenario","delta_prob"]].to_csv(
+#             IMPACTO_PATH, index=False)
+
+#         return df_result
+
+#     # FUNCIÓN AUXILIAR PARA ESCENARIOS POR CLUSTER
+#     def apply_cluster_scenario(df_scen_subset):
+#         probs_base_subset = predict_prob(model, scaler, df_subset, feature_cols)
+#         probs_scen_subset = predict_prob(model, scaler, df_scen_subset, feature_cols)
+
+#         df_result = df_full.copy()
+
+#         # asignar al subset
+#         df_result.loc[df_subset.index, "prob_base"] = probs_base_subset
+#         df_result.loc[df_subset.index, "prob_scenario"] = probs_scen_subset
+
+#         # otros clientes sin cambio
+#         others = df_full.index.difference(df_subset.index)
+#         if len(others) > 0:
+#             probs_base_others = predict_prob(model, scaler, df_full.loc[others], feature_cols)
+#             df_result.loc[others, "prob_base"] = probs_base_others
+#             df_result.loc[others, "prob_scenario"] = probs_base_others
+
+#         df_result["delta_prob"] = df_result["prob_scenario"] - df_result["prob_base"]
+
+#         df_result.to_csv(COMBINED_PATH, index=False)
+#         df_result[["ID_cliente","cluster_kmeans","prob_base","prob_scenario","delta_prob"]].to_csv(
+#             IMPACTO_PATH, index=False)
+
+#         return df_result
+
+#     if multiple_params:
+        
+#         # Determinar si es global o por cluster
+#         is_global = cluster is None
+
+#         # Escenario global
+#         if is_global:
+
+#             # Aplicar escenario al dataset completo
+#             df_scen = scenario_combined(
+#                 df_full,
+#                 income_drop=income_drop or 0,
+#                 rate_inc=rate_inc or 0,
+#                 extra_missed=behavior or 0
+#             )
+
+#             apply_global_scenario(df_scen)
+
+#             return (
+#                 "Escenario combinado aplicado a todo el portafolio:\n"
+#                 f"- Ingresos: -{(income_drop or 0)*100:.1f}%\n"
+#                 f"- Tasas: +{(rate_inc or 0)*100:.1f}%\n"
+#                 f"- Impagos: +{behavior or 0}"
+#             )
+
+#         # Escenario por cluster
+#         df_scen_subset = scenario_combined(
+#             df_subset,
+#             income_drop=income_drop or 0,
+#             rate_inc=rate_inc or 0,
+#             extra_missed=behavior or 0
+#         )
+
+#         apply_cluster_scenario(df_scen_subset)
+
+#         return (
+#             f"Escenario combinado aplicado en el cluster {cluster}:\n"
+#             f"- Ingresos: -{(income_drop or 0)*100:.1f}%\n"
+#             f"- Tasas: +{(rate_inc or 0)*100:.1f}%\n"
+#             f"- Impagos: +{behavior or 0}"
+#         )
+
+
+#     # ESCENARIO INGRESOS
+#     if income_drop is not None:
+#         if is_global:
+#             df_scen = scenario_income_drop(df_full, pct_drop=income_drop)
+#             apply_global_scenario(df_scen)
+#         else:
+#             df_scen_subset = scenario_income_drop(df_subset, pct_drop=income_drop)
+#             apply_cluster_scenario(df_scen_subset)
+
+#         return f"Escenario aplicado: ingresos -{income_drop*100:.1f}%"
+    
+#     # ESCENARIO TASA
+#     if rate_inc is not None:
+#         if is_global:
+#             df_scen = scenario_interest_rate_increase(df_full, extra_rate=rate_inc)
+#             apply_global_scenario(df_scen)
+#         else:
+#             df_scen_subset = scenario_interest_rate_increase(df_subset, extra_rate=rate_inc)
+#             apply_cluster_scenario(df_scen_subset)
+
+#         return f"Escenario aplicado: tasas +{rate_inc*100:.1f}%"
+
+#     # ESCENARIO COMPORTAMIENTO
+#     if behavior is not None:
+#         if is_global:
+#             df_scen = scenario_worse_payment_behavior(df_full, extra_missed=behavior)
+#             apply_global_scenario(df_scen)
+#         else:
+#             df_scen_subset = scenario_worse_payment_behavior(df_subset, extra_missed=behavior)
+#             apply_cluster_scenario(df_scen_subset)
+
+#         return f"Escenario aplicado: peor comportamiento +{behavior}"
+
+#     # ESCENARIO COMBINADO
+#     if income_drop is not None or rate_inc is not None or behavior is not None:
+#         if is_global:
+#             df_scen = scenario_combined(
+#                 df_full,
+#                 income_drop=income_drop or 0,
+#                 rate_inc=rate_inc or 0,
+#                 extra_missed=behavior or 0
+#             )
+#             apply_global_scenario(df_scen)
+#         else:
+#             df_scen_subset = scenario_combined(
+#                 df_subset,
+#                 income_drop=income_drop or 0,
+#                 rate_inc=rate_inc or 0,
+#                 extra_missed=behavior or 0
+#             )
+#             apply_cluster_scenario(df_scen_subset)
+
+#         return (
+#             "Escenario combinado aplicado:\n"
+#             f"- Ingresos: -{(income_drop or 0)*100:.1f}%\n"
+#             f"- Tasas: +{(rate_inc or 0)*100:.1f}%\n"
+#             f"- Impagos: +{behavior or 0}"
+#         )
+
+#     return None
 
 # API para recargar datos desde Streamlit
 

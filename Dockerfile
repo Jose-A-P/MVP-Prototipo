@@ -12,6 +12,7 @@ RUN pip install --upgrade pip setuptools wheel && \
 COPY . .
 
 ENV OLLAMA_HOST=http://host.docker.internal:11434
+ENV OLLAMA_EMBEDDING_URL=http://host.docker.internal:11434
 
 EXPOSE 8501
 

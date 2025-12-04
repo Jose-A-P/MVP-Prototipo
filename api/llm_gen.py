@@ -5,7 +5,7 @@ import re
 from langchain_ollama import OllamaLLM
 
 # === RAG PIPELINE
-from api.rag_chat import build_rag_pipeline
+from api.rag_chat import get_rag_answer
 
 # === Escenarios y Digital Twin
 from api.digital_twin_tools import (
@@ -30,8 +30,15 @@ from api.dataset_query_tools import (
     apply_filters
 )
 
+from api.scenario_manager import (
+        list_scenarios,
+        load_scenario,
+        compare_scenarios
+    )
+
 from api.scenario_explainer import compute_scenario_metrics
 
+from api.executive_report import generate_executive_report
 
 # ============================================================
 # Función auxiliar para explicar escenarios
@@ -148,7 +155,7 @@ def generate_chat_response(prompt: str) -> str:
     df = load_latest_data()
 
     # ============================================================
-    # ESCENARIOS (si detecta escenario → prioridad absoluta)
+    # ESCENARIOS (si detecta escenario es prioridad absoluta)
     # ============================================================
     if detect_scenario_query(text):
         result = chatbot_execute_action(prompt)
@@ -235,18 +242,90 @@ def generate_chat_response(prompt: str) -> str:
             if parsed["intent"] == "cluster_risk":
                 stats = cluster_stats(df)
                 return f"```\n{stats}\n```"
+    
+    # ============================================================
+    # LISTAR ESCENARIOS
+    # ============================================================
+    if "lista escenarios" in text or "listar escenarios" in text:
+        scenarios = list_scenarios()
+        if not scenarios:
+            return "Aún no hay escenarios guardados."
+        
+        out = "**Escenarios disponibles:**\n"
+        for s in scenarios:
+            out += (
+                f"- Escenario {s['scenario_id']:03d} | "
+                f"{s['timestamp']} | "
+                f"tipo: {s.get('type', 'N/A')}\n"
+            )
+        return out
 
+    # ============================================================
+    # CARGAR ESCENARIOS
+    # ============================================================
+    match = re.search(r"carga[r]? escenario (\d+)", text)
+    if match:
+        sid = int(match.group(1))
+        loaded = load_scenario(sid)
+        if loaded is None:
+            return f"No existe el escenario {sid:03d}."
+        
+        df_comb, df_imp, meta = loaded
+        return (
+            f"**Escenario {sid:03d} cargado correctamente.**\n\n"
+            f"Metadata:\n```\n{meta}\n```"
+        )
+
+    # ============================================================
+    # COMPARAR ESCENARIOS
+    # ============================================================
+    match = re.search(r"compara[r]? escenario (\d+) con (\d+)", text)
+    if match:
+        s1 = int(match.group(1))
+        s2 = int(match.group(2))
+        comp = compare_scenarios(s1, s2)
+
+        if comp is None:
+            return "No se pudo comparar los escenarios."
+
+        top = comp["top_risk_increase"].head().to_string()
+
+        return (
+            f"**Comparación entre escenarios {s1:03d} y {s2:03d}:**\n\n"
+            f"- Δ medio S{s1:03d}: **{comp['mean_delta_1']:.4f}**\n"
+            f"- Δ medio S{s2:03d}: **{comp['mean_delta_2']:.4f}**\n"
+            f"- Diferencia: **{comp['diff_mean']:.4f}**\n\n"
+            f"Clientes con mayor deterioro adicional en el escenario {s2:03d}:\n"
+            f"```\n{top}\n```"
+        )
+
+
+    # ============================================================
+    # REPORTE EJECUTIVO (comandos tipo "reporte ejecutivo")
+    # ============================================================
+    if any(
+        k in text
+        for k in [
+            "reporte ejecutivo",
+            "informe ejecutivo",
+            "reporte para comité",
+            "informe para comité",
+            "reporte de riesgo",
+        ]
+    ):
+        try:
+            return generate_executive_report()
+        except Exception as e:
+            return f"No pude generar el reporte ejecutivo. Verifica que ya hayas corrido un escenario.\nDetalle técnico: {e}"
     # ============================================================
     # RAG — preguntas conceptuales
     # ============================================================
     if is_conceptual_financial_question(text):
         try:
-            rag = build_rag_pipeline()
-            chain = rag.get_qa_chain()
-            result = chain.invoke({"query": prompt})
-            return result["result"]  # ← solo el texto, no JSON completo
+            answer = get_rag_answer(prompt)
+            return answer
         except Exception as e:
-            return f"Error en RAG: {str(e)}"
+            return f"Error en RAG: {e}"
 
     # ============================================================
     # FALLBACK → LLM directo
