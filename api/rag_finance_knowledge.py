@@ -6,7 +6,8 @@ from api.scenario_explainer import compute_scenario_metrics
 
 
 def build_variable_dictionary() -> dict:
-    """Diccionario manual de variables con explicación financiera."""
+    # Define un diccionario con la explicación conceptual de cada variable financiera.
+    # Este diccionario sirve como fuente de conocimiento estático para el sistema RAG.
     return {
         "score_crediticio": "Puntaje de riesgo crediticio del cliente. A mayor score, menor riesgo.",
         "ingresos_mensuales": "Ingresos mensuales estimados del cliente.",
@@ -18,11 +19,13 @@ def build_variable_dictionary() -> dict:
         "cluster_kmeans": "Cluster de segmentación obtenido a partir de características de riesgo y comportamiento.",
         "prob_base": "Probabilidad de impago estimada en el escenario base.",
         "prob_scenario": "Probabilidad de impago estimada bajo el escenario simulado.",
-        "delta_prob": "Cambio en la probabilidad de impago (escenario - base)."
+        "delta_prob": "Cambio en la probabilidad de impago (escenario menos base)."
     }
 
 
 def build_portfolio_overview(df: pd.DataFrame) -> str:
+    # Genera un resumen descriptivo del comportamiento agregado del portafolio.
+    # La información presentada es utilizada como contexto para el motor RAG.
     n_clients = len(df)
     mean_base = df["prob_base"].mean() if "prob_base" in df.columns else np.nan
     mean_scen = df["prob_scenario"].mean() if "prob_scenario" in df.columns else np.nan
@@ -45,6 +48,8 @@ def build_portfolio_overview(df: pd.DataFrame) -> str:
 
 
 def build_cluster_profiles(df: pd.DataFrame) -> str:
+    # Genera descripciones separadas por cluster, resumiendo comportamientos promedio.
+    # Es útil para análisis conceptuales que el RAG debe responder.
     if "cluster_kmeans" not in df.columns:
         return "No hay información de clusters en el dataset actual."
 
@@ -80,6 +85,8 @@ def build_cluster_profiles(df: pd.DataFrame) -> str:
 
 
 def build_variable_explanations() -> str:
+    # Crea una sección textual explicando cada variable disponible en el dataset.
+    # Esta sección proporciona contexto semántico para el RAG.
     var_dict = build_variable_dictionary()
     lines = ["DESCRIPCIÓN DE VARIABLES FINANCIERAS\n"]
     for var, desc in var_dict.items():
@@ -88,6 +95,8 @@ def build_variable_explanations() -> str:
 
 
 def build_scenario_explanation_snippet() -> str:
+    # Construye un texto descriptivo con las métricas del escenario más reciente.
+    # Sirve para que el motor RAG explique conceptualmente el efecto del escenario.
     metrics = compute_scenario_metrics()
     if metrics is None:
         return "Aún no se ha simulado un escenario, no hay métricas de impacto disponibles."
@@ -100,7 +109,7 @@ def build_scenario_explanation_snippet() -> str:
     - Delta promedio: {metrics["mean_delta"]:.4f}
     - Severidad del escenario: {metrics["severity"]}
     - Cluster más afectado: {metrics["cluster_worst"]} (delta promedio {metrics["cluster_worst_delta"]:.4f})
-    - Top 5 clientes más afectados (por delta_prob): {metrics["top5"]}
+    - Top 5 clientes más afectados: {metrics["top5"]}
 
     Estas métricas resumen el impacto del escenario simulado sobre el riesgo de impago del portafolio.
     """
@@ -108,10 +117,8 @@ def build_scenario_explanation_snippet() -> str:
 
 
 def build_financial_knowledge_corpus() -> list[str]:
-    """
-    Genera una lista de textos financieros (corpus) a partir del dataset actual,
-    que luego será usado por el RAG.
-    """
+    # Reúne en una lista todos los textos que formarán el corpus del RAG.
+    # Combina resúmenes, perfiles, explicaciones y métricas del escenario actual.
     df = load_latest_data()
     if df is None:
         return ["No hay datos cargados actualmente en el portafolio."]

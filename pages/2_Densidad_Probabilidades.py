@@ -23,7 +23,7 @@ if "delta_prob" not in df.columns:
     df["delta_prob"] = df["prob_scenario"] - df["prob_base"]
 
 # KDE base vs escenario
-st.subheader("📈 Densidad de probabilidad – Base vs Escenario")
+st.subheader("Densidad de probabilidad – Base vs Escenario")
 
 base = df["prob_base"].dropna().values
 scen = df["prob_scenario"].dropna().values
@@ -46,7 +46,7 @@ st.plotly_chart(fig, use_container_width=True)
 st.divider()
 
 # KDE por cluster
-st.subheader("🎯 Densidad por Cluster")
+st.subheader("Densidad por Cluster")
 
 clusters = sorted(df["cluster_kmeans"].unique())
 
@@ -95,7 +95,7 @@ st.plotly_chart(fig_delta, use_container_width=True)
 st.divider()
 
 # Scatter interactivo
-st.subheader("🔍 Scatter interactivo – Ingresos vs Probabilidad")
+st.subheader("Scatter interactivo – Ingresos vs Probabilidad")
 
 metric = st.selectbox(
     "Selecciona qué probabilidad graficar:",

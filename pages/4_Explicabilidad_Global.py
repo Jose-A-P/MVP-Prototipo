@@ -57,7 +57,7 @@ El **beeswarm plot** revela:
 st.divider()
 
 # DEPENDENCE PLOT (VARIABLE ESPECÍFICA)
-st.subheader("🔍 SHAP Dependence Plot (Variable Específica)")
+st.subheader("SHAP Dependence Plot (Variable Específica)")
 
 variable = st.selectbox(
     "Selecciona la variable para analizar:",
